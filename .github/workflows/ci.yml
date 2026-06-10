@@ -61,6 +61,7 @@ jobs:
           POSTGRES_USER: admin
           POSTGRES_PASSWORD: admin
           POSTGRES_DB: asynclms_test
+          PYTHONPATH: .
         run: |
           cd backend
           pytest -v
