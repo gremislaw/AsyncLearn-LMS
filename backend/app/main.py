@@ -1,62 +1,59 @@
 from fastapi import FastAPI
-from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
-import asyncio
-import logging
-
-from app.core.config import settings
-from app.core.database import engine
-from app.models.sql_models import Base
 from app.api import auth, courses, progress, admin
-from app.core.kafka import kafka_producer
-from app.core.rabbitmq import rabbitmq_client
-from app.workers.redis_worker import process_welcome_email_queue
-from app.workers.kafka_consumer import consume_purchase_events
-from app.workers.rabbitmq_consumer import process_video_conversion
-from app.workers.background_tasks import check_expired_access
+from app.core import config, database
+from app.workers import redis_worker, kafka_consumer, rabbitmq_consumer, background_tasks
+import uvicorn
 
-logging.basicConfig(level=logging.INFO)
+app = FastAPI(
+    title="AsyncLearn LMS",
+    description="Асинхронная платформа онлайн-обучения",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
 
-background_tasks_list = []
-
-async def start_background_tasks():
-    task1 = asyncio.create_task(process_welcome_email_queue())
-    task2 = asyncio.create_task(consume_purchase_events())
-    task3 = asyncio.create_task(process_video_conversion())
-    task4 = asyncio.create_task(check_expired_access())
-    background_tasks_list.extend([task1, task2, task3, task4])
-
-async def stop_background_tasks():
-    for task in background_tasks_list:
-        task.cancel()
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    await kafka_producer.start()
-    await rabbitmq_client.connect()
-    await start_background_tasks()
-    yield
-    await kafka_producer.stop()
-    await rabbitmq_client.close()
-    await stop_background_tasks()
-
-app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
-
+# Настройка CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # В продакшене нужно указать конкретные домены
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(auth.router, prefix=f"{settings.API_V1_STR}/auth", tags=["Auth"])
-app.include_router(courses.router, prefix=f"{settings.API_V1_STR}/courses", tags=["Courses"])
-app.include_router(progress.router, prefix=f"{settings.API_V1_STR}/progress", tags=["Progress"])
-app.include_router(admin.router, prefix=f"{settings.API_V1_STR}/admin", tags=["Admin"])
+# Подключение роутеров
+app.include_router(auth.router, prefix="/auth", tags=["Аутентификация"])
+app.include_router(courses.router, prefix="/courses", tags=["Курсы"])
+app.include_router(progress.router, prefix="/progress", tags=["Прогресс"])
+app.include_router(admin.router, prefix="/admin", tags=["Администрирование"])
 
+# Healthcheck эндпоинт
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": settings.PROJECT_NAME}
+    return {"status": "ok"}
+
+@app.on_event("startup")
+async def startup_event():
+    # Запуск воркеров
+    await redis_worker.start_worker()
+    await kafka_consumer.start_consumer()
+    await rabbitmq_consumer.start_consumer()
+    await background_tasks.start_background_tasks()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    # Остановка воркеров
+    await redis_worker.stop_worker()
+    await kafka_consumer.stop_consumer()
+    await rabbitmq_consumer.stop_consumer()
+    await background_tasks.stop_background_tasks()
+
+if __name__ == "__main__":
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        log_level="info"
+    )

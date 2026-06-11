@@ -1,25 +1,26 @@
 import asyncio
-import json
-import logging
-import aio_pika
+from app.core.rabbitmq import start_video_consumer, stop_rabbitmq
 from app.core.config import settings
+from app.services.video_service import VideoService
 
-logger = logging.getLogger(__name__)
+class RabbitMQConsumer:
+    def __init__(self):
+        self.is_running = False
 
-async def process_video_conversion() -> None:
-    try:
-        connection = await aio_pika.connect_robust(settings.RABBITMQ_URL)
-        channel = await connection.channel()
-        queue = await channel.declare_queue("video_conversion", durable=True)
+    async def start_consumer(self):
+        self.is_running = True
+        asyncio.create_task(start_video_consumer())
 
-        async with queue.iterator() as queue_iter:
-            logger.info("RabbitMQ Consumer: Started listening for video conversions...")
-            async for message in queue_iter:
-                async with message.process():
-                    data = json.loads(message.body.decode())
-                    video_path = data.get("video_path")
-                    logger.info(f"Starting video conversion for {video_path}")
-                    await asyncio.sleep(3) 
-                    logger.info(f"Video conversion completed for {video_path}")
-    except Exception as e:
-        logger.error(f"RabbitMQ Consumer error: {e}")
+    async def stop_consumer(self):
+        self.is_running = False
+        await stop_rabbitmq()
+
+# Создаем экземпляр консьюмера
+rabbitmq_consumer_instance = RabbitMQConsumer()
+
+# Функции для запуска и остановки консьюмера
+async def start_consumer():
+    await rabbitmq_consumer_instance.start_consumer()
+
+async def stop_consumer():
+    await rabbitmq_consumer_instance.stop_consumer()

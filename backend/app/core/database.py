@@ -1,25 +1,48 @@
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.orm import declarative_base
+from sqlalchemy.pool import NullPool
 from motor.motor_asyncio import AsyncIOMotorClient
 from redis.asyncio import Redis
-from app.core.config import settings
+from .config import settings
 
 # PostgreSQL
-engine = create_async_engine(settings.DATABASE_URL, echo=False)
-AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+DATABASE_URL = f"postgresql+asyncpg://{settings.POSTGRES_USER}:{settings.POSTGRES_PASSWORD}@{settings.POSTGRES_SERVER}:{settings.POSTGRES_PORT}/{settings.POSTGRES_DB}"
+
+engine = create_async_engine(
+    DATABASE_URL,
+    poolclass=NullPool,
+    echo=settings.DEBUG
+)
+
+AsyncSessionLocal = async_sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False
+)
+
+BaseSQL = declarative_base()
 
 # MongoDB
-mongo_client = AsyncIOMotorClient(settings.MONGO_URL)
+MONGO_URL = f"mongodb://{settings.MONGO_USER}:{settings.MONGO_PASSWORD}@{settings.MONGO_SERVER}:{settings.MONGO_PORT}/{settings.MONGO_DB}"
+
+mongo_client = AsyncIOMotorClient(MONGO_URL)
 mongo_db = mongo_client[settings.MONGO_DB]
 
 # Redis
-redis_client = Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, decode_responses=True)
+redis_client = Redis(
+    host=settings.REDIS_SERVER,
+    port=settings.REDIS_PORT,
+    db=settings.REDIS_DB,
+    decode_responses=True
+)
 
-async def get_postgres_session() -> AsyncSession:
+# Функции для получения сессий
+async def get_db() -> AsyncSession:
     async with AsyncSessionLocal() as session:
         yield session
 
-def get_mongo_db():
-    return mongo_db
-
-def get_redis() -> Redis:
-    return redis_client
+# Функция для инициализации БД
+async def init_db():
+    # Создание таблиц PostgreSQL
+    async with engine.begin() as conn:
+        await conn.run_sync(BaseSQL.metadata.create_all)

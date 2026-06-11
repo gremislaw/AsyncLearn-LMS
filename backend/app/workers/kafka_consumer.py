@@ -1,27 +1,45 @@
 import asyncio
-import json
-import logging
-from aiokafka import AIOKafkaConsumer
-from app.core.config import settings
+from app.core.kafka import kafka_consumer
+from app.services.email_service import EmailService
 
-logger = logging.getLogger(__name__)
+class KafkaConsumer:
+    def __init__(self):
+        self.is_running = False
 
-async def consume_purchase_events() -> None:
-    consumer = AIOKafkaConsumer(
-        settings.KAFKA_TOPIC_PURCHASE,
-        bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS,
-        group_id="lms_email_service",
-        value_deserializer=lambda v: json.loads(v.decode("utf-8"))
-    )
-    await consumer.start()
-    logger.info("Kafka Consumer: Started listening for purchase events...")
-    try:
-        async for msg in consumer:
-            data = msg.value
-            email = data.get("email")
-            logger.info(f"Sending purchase confirmation email to {email}")
-            await asyncio.sleep(1)
-    except Exception as e:
-        logger.error(f"Kafka Consumer error: {e}")
-    finally:
-        await consumer.stop()
+    async def start_consumer(self):
+        self.is_running = True
+        asyncio.create_task(self.process_messages())
+
+    async def stop_consumer(self):
+        self.is_running = False
+
+    async def process_messages(self):
+        while self.is_running:
+            try:
+                # Получаем сообщения из Kafka
+                async for message in kafka_consumer:
+                    # Обрабатываем сообщение
+                    data = message.value
+                    print(f"Received Kafka message: {data}")
+
+                    # Отправляем email уведомление о покупке
+                    email_service = EmailService()
+                    await email_service.send_purchase_confirmation(
+                        to=data["email"],
+                        course_name=data["course_name"],
+                        amount=data["amount"]
+                    )
+
+            except Exception as e:
+                print(f"Error processing Kafka message: {e}")
+                await asyncio.sleep(1)
+
+# Создаем экземпляр консьюмера
+kafka_consumer_instance = KafkaConsumer()
+
+# Функции для запуска и остановки консьюмера
+async def start_consumer():
+    await kafka_consumer_instance.start_consumer()
+
+async def stop_consumer():
+    await kafka_consumer_instance.stop_consumer()

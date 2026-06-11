@@ -1,24 +1,57 @@
 import asyncio
-import json
-import logging
-from app.core.database import get_redis
+from redis.asyncio import Redis
+from app.core.config import settings
+from app.core.database import AsyncSession
+from app.services.email_service import EmailService
 
-logger = logging.getLogger(__name__)
+class RedisWorker:
+    def __init__(self):
+        self.redis_client = Redis(
+            host=settings.REDIS_SERVER,
+            port=settings.REDIS_PORT,
+            db=settings.REDIS_DB,
+            decode_responses=True
+        )
+        self.email_service = EmailService()
+        self.is_running = False
 
-async def process_welcome_email_queue() -> None:
-    redis = get_redis()
-    logger.info("Redis Worker: Started listening for welcome emails...")
-    
-    while True:
-        try:
-            message = await redis.brpop("email_welcome_queue", timeout=5)
-            if message:
-                _, payload = message
-                data = json.loads(payload)
-                email = data.get("email")
-                logger.info(f"Sending welcome email to {email}")
+    async def start_worker(self):
+        self.is_running = True
+        asyncio.create_task(self.process_queue())
+
+    async def stop_worker(self):
+        self.is_running = False
+        await self.redis_client.close()
+
+    async def process_queue(self):
+        while self.is_running:
+            try:
+                # Получаем задачу из очереди
+                task = await self.redis_client.brpop("email_queue", timeout=1)
+                if not task:
+                    continue
+
+                _, task_data = task
+                email_data = eval(task_data)  # В реальном проекте лучше использовать JSON
+
+                # Обработка задачи
+                await self.email_service.send_welcome_email(
+                    to=email_data["to"],
+                    username=email_data["username"]
+                )
+
+                print(f"Processed email task: {email_data}")
+
+            except Exception as e:
+                print(f"Error processing Redis queue: {e}")
                 await asyncio.sleep(1)
-                logger.info(f"Welcome email sent to {email}")
-        except Exception as e:
-            logger.error(f"Redis Worker error: {e}")
-            await asyncio.sleep(5)
+
+# Создаем экземпляр воркера
+redis_worker = RedisWorker()
+
+# Функции для запуска и остановки воркера
+async def start_worker():
+    await redis_worker.start_worker()
+
+async def stop_worker():
+    await redis_worker.stop_worker()

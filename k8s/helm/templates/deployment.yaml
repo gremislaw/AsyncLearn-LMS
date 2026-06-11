@@ -1,31 +1,134 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "asynclms.fullname" . }}
+  name: {{ include "asynclearn.fullname" . }}-backend
   labels:
-    app: {{ .Chart.Name }}
+    app: {{ include "asynclearn.name" . }}
+    component: backend
 spec:
-  replicas: {{ .Values.replicaCount }}
+  replicas: {{ .Values.backend.replicaCount }}
   selector:
     matchLabels:
-      app: {{ .Chart.Name }}
+      app: {{ include "asynclearn.name" . }}
+      component: backend
   template:
     metadata:
       labels:
-        app: {{ .Chart.Name }}
+        app: {{ include "asynclearn.name" . }}
+        component: backend
     spec:
       containers:
-        - name: {{ .Chart.Name }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          ports:
-            - containerPort: 8000
-          envFrom:
-            - secretRef:
-                name: asynclms-secrets
-          resources:
-            requests:
-              cpu: "100m"
-              memory: "128Mi"
-            limits:
-              cpu: "500m"
-              memory: "512Mi"
+      - name: backend
+        image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+        imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        env:
+        - name: POSTGRES_SERVER
+          value: {{ .Values.postgres.host }}
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "asynclearn.fullname" . }}-postgres
+              key: postgres-user
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "asynclearn.fullname" . }}-postgres
+              key: postgres-password
+        - name: POSTGRES_DB
+          value: {{ .Values.postgres.database }}
+        - name: MONGO_SERVER
+          value: {{ .Values.mongo.host }}
+        - name: MONGO_USER
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "asynclearn.fullname" . }}-mongo
+              key: mongo-user
+        - name: MONGO_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "asynclearn.fullname" . }}-mongo
+              key: mongo-password
+        - name: REDIS_SERVER
+          value: {{ .Values.redis.host }}
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: {{ .Values.kafka.host }}:{{ .Values.kafka.port }}
+        - name: RABBITMQ_SERVER
+          value: {{ .Values.rabbitmq.host }}
+        - name: RABBITMQ_USER
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "asynclearn.fullname" . }}-rabbitmq
+              key: rabbitmq-user
+        - name: RABBITMQ_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "asynclearn.fullname" . }}-rabbitmq
+              key: rabbitmq-password
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "asynclearn.fullname" . }}-secrets
+              key: secret-key
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          {{- toYaml .Values.backend.resources | nindent 10 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "asynclearn.fullname" . }}-frontend
+  labels:
+    app: {{ include "asynclearn.name" . }}
+    component: frontend
+spec:
+  replicas: {{ .Values.frontend.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "asynclearn.name" . }}
+      component: frontend
+  template:
+    metadata:
+      labels:
+        app: {{ include "asynclearn.name" . }}
+        component: frontend
+    spec:
+      containers:
+      - name: frontend
+        image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
+        imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+        ports:
+        - containerPort: 3000
+          name: http
+          protocol: TCP
+        env:
+        - name: REACT_APP_API_URL
+          value: {{ .Values.frontend.apiUrl }}
+        livenessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          {{- toYaml .Values.frontend.resources | nindent 10 }}

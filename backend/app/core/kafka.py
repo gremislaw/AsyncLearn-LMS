@@ -1,54 +1,42 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Optional
+from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
+from app.core.config import settings
+import asyncio
+import json
 
-class Settings(BaseSettings):
-    PROJECT_NAME: str = "AsyncLearn LMS"
-    API_V1_STR: str = "/api/v1"
-    
-    # Postgres
-    POSTGRES_USER: str = "admin"
-    POSTGRES_PASSWORD: str = "admin"
-    POSTGRES_DB: str = "asynclms"
-    POSTGRES_HOST: str = "postgres"
-    POSTGRES_PORT: int = 5432
-    
-    @property
-    def DATABASE_URL(self) -> str:
-        return f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+# Создаем продюсера
+kafka_producer = AIOKafkaProducer(
+    bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS,
+    value_serializer=lambda v: json.dumps(v).encode()
+)
 
-    # MongoDB
-    MONGO_HOST: str = "mongo"
-    MONGO_PORT: int = 27017
-    MONGO_DB: str = "lms_progress"
-    MONGO_USER: str = "admin"
-    MONGO_PASSWORD: str = "admin"
-    
-    @property
-    def MONGO_URL(self) -> str:
-        return f"mongodb://{self.MONGO_USER}:{self.MONGO_PASSWORD}@{self.MONGO_HOST}:{self.MONGO_PORT}"
+# Создаем консьюмера
+kafka_consumer = AIOKafkaConsumer(
+    settings.KAFKA_TOPIC_EMAILS,
+    bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS,
+    group_id="email_service",
+    value_deserializer=lambda m: json.loads(m.decode())
+)
 
-    # Redis
-    REDIS_HOST: str = "redis"
-    REDIS_PORT: int = 6379
+async def start_kafka_producer():
+    await kafka_producer.start()
 
-    # Kafka
-    KAFKA_BOOTSTRAP_SERVERS: str = "kafka:9092"
-    KAFKA_TOPIC_PURCHASE: str = "course_purchases"
+async def stop_kafka_producer():
+    await kafka_producer.stop()
 
-    # RabbitMQ
-    RABBITMQ_HOST: str = "rabbitmq"
-    RABBITMQ_USER: str = "guest"
-    RABBITMQ_PASSWORD: str = "guest"
-    
-    @property
-    def RABBITMQ_URL(self) -> str:
-        return f"amqp://{self.RABBITMQ_USER}:{self.RABBITMQ_PASSWORD}@{self.RABBITMQ_HOST}/"
+async def send_email_notification(data: dict):
+    await kafka_producer.send_and_wait(settings.KAFKA_TOPIC_EMAILS, value=data)
 
-    # JWT
-    SECRET_KEY: str = "supersecretjwtkey_change_in_prod"
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+async def start_kafka_consumer():
+    await kafka_consumer.start()
+    async for message in kafka_consumer:
+        # Обработка сообщений
+        try:
+            data = message.value
+            print(f"Received email notification: {data}")
+            # Здесь будет логика отправки email
+        except Exception as e:
+            print(f"Error processing Kafka message: {e}")
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-
-settings = Settings()
+# Функция для запуска консьюмера в отдельном потоке
+async def run_kafka_consumer():
+    asyncio.create_task(start_kafka_consumer())

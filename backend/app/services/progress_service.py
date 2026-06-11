@@ -1,35 +1,63 @@
-from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from motor.motor_asyncio import AsyncIOMotorDatabase
-from app.repositories.progress_repository import ProgressRepository
-from app.models.sql_models import Lesson, User
-from app.models.pydantic_schemas import ProgressUpdate, ProgressResponse
-from typing import List
+from motor.motor_asyncio import AsyncIOMotorClient
+from typing import List, Optional, Dict, Any
+from datetime import datetime
 
 class ProgressService:
-    def __init__(self, pg_db: AsyncSession, mongo_db: AsyncIOMotorDatabase):
-        self.pg_db = pg_db
-        self.progress_repo = ProgressRepository(mongo_db)
+    def __init__(self, mongo_client: AsyncIOMotorClient):
+        self.db = mongo_client["asynclearn"]
+        self.collection = self.db["progress"]
 
-    async def update_lesson_progress(self, lesson_id: int, progress_in: ProgressUpdate, current_user: User) -> dict:
-        lesson = await self.pg_db.get(Lesson, lesson_id)
-        if not lesson:
-            raise HTTPException(status_code=404, detail="Lesson not found")
+    async def update_progress(self, user_id: int, lesson_id: int, watched_seconds: int, is_completed: bool) -> Dict[str, Any]:
+        # Обновляем или создаем запись прогресса
+        progress_data = {
+            "user_id": user_id,
+            "lesson_id": lesson_id,
+            "watched_seconds": watched_seconds,
+            "is_completed": is_completed,
+            "last_watched_at": datetime.utcnow()
+        }
 
-        return await self.progress_repo.update_progress(
-            user_id=current_user.id,
-            lesson_id=lesson_id,
-            watched_seconds=progress_in.watched_seconds,
-            is_completed=progress_in.is_completed
+        result = await self.collection.update_one(
+            {"user_id": user_id, "lesson_id": lesson_id},
+            {"$set": progress_data},
+            upsert=True
         )
 
-    async def get_course_progress(self, course_id: int, current_user: User) -> List[dict]:
-        result = await self.pg_db.execute(select(Lesson).where(Lesson.course_id == course_id))
-        lessons = result.scalars().all()
-        lesson_ids = [lesson.id for lesson in lessons]
+        return progress_data
 
-        return await self.progress_repo.get_course_progress(
-            user_id=current_user.id,
-            lesson_ids=lesson_ids
-        )
+    async def get_progress_by_course(self, user_id: int, course_id: int) -> List[Dict[str, Any]]:
+        # Получаем все уроки курса
+        lessons = await self.db["lessons"].find({"course_id": course_id}).to_list(None)
+        lesson_ids = [lesson["id"] for lesson in lessons]
+
+        # Получаем прогресс пользователя по этим урокам
+        progress = await self.collection.find({
+            "user_id": user_id,
+            "lesson_id": {"$in": lesson_ids}
+        }).to_list(None)
+
+        return progress
+
+    async def get_progress_by_lesson(self, user_id: int, lesson_id: int) -> Optional[Dict[str, Any]]:
+        progress = await self.collection.find_one({
+            "user_id": user_id,
+            "lesson_id": lesson_id
+        })
+        return progress
+
+    async def get_course_completion_percentage(self, user_id: int, course_id: int) -> float:
+        # Получаем все уроки курса
+        lessons = await self.db["lessons"].find({"course_id": course_id}).to_list(None)
+        total_lessons = len(lessons)
+
+        if total_lessons == 0:
+            return 0.0
+
+        # Получаем количество пройденных уроков
+        completed_lessons = await self.collection.count_documents({
+            "user_id": user_id,
+            "lesson_id": {"$in": [lesson["id"] for lesson in lessons]},
+            "is_completed": True
+        })
+
+        return (completed_lessons / total_lessons) * 100
